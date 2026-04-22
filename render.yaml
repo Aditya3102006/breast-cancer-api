@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: breast-cancer-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_KEY
+        sync: false # User should set this in Render dashboard
