@@ -6,3 +6,11 @@ scikit-learn
 google-generativeai
 requests
 python-multipart
+streamlit
+streamlit-folium
+langchain
+langchain-community
+langchain-google-genai
+faiss-cpu
+pypdf
+jinja2

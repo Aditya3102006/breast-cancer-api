@@ -6,14 +6,27 @@ Exposes:
   GET  /api/geocode       → Location geocoding
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-import pickle, pandas as pd
+import os, pickle, pandas as pd
 from typing import Optional, List
 import hospital_backend as hb
 import google.generativeai as genai
-from pydantic import BaseModel
+import rag_backend as rag
+
+# ─── Security Setup ───────────────────────────────────────────────────────────
+security = HTTPBearer()
+APP_API_KEY = os.environ.get("APP_API_KEY", "breast-cancer-secret-key-2026")
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verifies client Authorization Bearer Token against APP_API_KEY."""
+    if credentials.credentials != APP_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key. Please check your credentials."
+        )
 
 # ─── App Setup ────────────────────────────────────────────────────────────────
 app = FastAPI(title="Breast Cancer Diagnostic AI API", version="2.0")
@@ -28,7 +41,7 @@ app.add_middleware(
 
 # ─── Gemini AI Setup ──────────────────────────────────────────────────────────
 # Using gemini-1.5-flash
-GEMINI_KEY = "AIzaSyC4pedn_3FdEDGOclYbD9E-g1bvAGyZkdc"
+GEMINI_KEY = os.environ.get("GOOGLE_API_KEY", os.environ.get("GEMINI_KEY", "AQ.Ab8RN6JqiFwGyIbwD5AWx8w0pf9Bn9lqHzgy6UcbYBcihcdcKQ"))
 genai.configure(api_key=GEMINI_KEY)
 
 SYSTEM_PROMPT = """You are a compassionate, expert clinical AI assistant specializing in breast cancer awareness, diagnosis, and treatment. 
@@ -38,7 +51,7 @@ Keep responses concise, empathetic, and easy to understand."""
 
 # Create model with system instruction
 model = genai.GenerativeModel(
-    model_name='gemini-1.5-flash',
+    model_name='gemini-2.5-flash',
     system_instruction=SYSTEM_PROMPT
 )
 
@@ -74,7 +87,7 @@ def root():
     return {"status": "online", "api": "Breast Cancer Diagnostic AI v2.0"}
 
 
-@app.post("/api/predict", response_model=PredictResponse)
+@app.post("/api/predict", response_model=PredictResponse, dependencies=[Depends(verify_api_key)])
 def predict(req: PredictRequest):
     """Run the ML model and return prediction + probabilities."""
     try:
@@ -92,7 +105,7 @@ def predict(req: PredictRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/geocode")
+@app.get("/api/geocode", dependencies=[Depends(verify_api_key)])
 def geocode(q: str):
     """Geocode a location string to lat/lng."""
     result = hb.geocode_location(q)
@@ -101,7 +114,7 @@ def geocode(q: str):
     return result
 
 
-@app.get("/api/hospitals")
+@app.get("/api/hospitals", dependencies=[Depends(verify_api_key)])
 def hospitals(
     lat: float,
     lng: float,
@@ -122,7 +135,7 @@ def hospitals(
     return result
 
 
-@app.post("/api/chat", response_model=ChatResponse)
+@app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 def chat(req: ChatRequest):
     """Proxy chat requests to Gemini with clinical context."""
     try:
@@ -154,3 +167,78 @@ def chat(req: ChatRequest):
         if "429" in error_str:
             raise HTTPException(status_code=429, detail="AI Service is currently busy. Please try again in a minute.")
         raise HTTPException(status_code=500, detail=error_str)
+
+
+# ─── RAG Schemas ──────────────────────────────────────────────────────────────
+class ExplainRequest(BaseModel):
+    prediction_label: str
+    confidence: float
+    features: dict
+
+class RAGChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    report_text: Optional[str] = None
+
+class DoctorPrepRequest(BaseModel):
+    report_text: Optional[str] = None
+    prediction_label: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+# ─── RAG Endpoints ────────────────────────────────────────────────────────────
+@app.post("/api/rag/explain", dependencies=[Depends(verify_api_key)])
+def explain(req: ExplainRequest):
+    """Explain ML model prediction using clinical guidelines (RAG)."""
+    try:
+        explanation = rag.explain_prediction(
+            req.prediction_label, 
+            req.confidence, 
+            req.features
+        )
+        return {"explanation": explanation}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/rag/analyze_report", dependencies=[Depends(verify_api_key)])
+async def analyze_report(file: UploadFile = File(...)):
+    """Upload pathology report (PDF or TXT) and extract clinical markers."""
+    try:
+        content = await file.read()
+        text = rag.extract_text_from_upload(content, file.filename)
+        if not text or text.startswith("Failed") or "Unsupported" in text:
+            raise HTTPException(status_code=400, detail=text or "Empty report content.")
+            
+        parsed_data = rag.extract_pathology_data(text)
+        return {
+            "success": True,
+            "raw_text": text,
+            "parsed_data": parsed_data
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/rag/chat", dependencies=[Depends(verify_api_key)])
+def rag_chat(req: RAGChatRequest):
+    """Chat with AI breast cancer assistant grounded in medical knowledge & report."""
+    try:
+        msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+        reply = rag.chat_qa(msgs, report_text=req.report_text)
+        return {"reply": reply}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/rag/doctor_prep", dependencies=[Depends(verify_api_key)])
+def doctor_prep(req: DoctorPrepRequest):
+    """Generate customized consultation preparation checklist & question guide."""
+    try:
+        prep_kit = rag.generate_doctor_prep_kit(
+            report_text=req.report_text,
+            prediction_label=req.prediction_label,
+            confidence=req.confidence
+        )
+        return {"prep_kit": prep_kit}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
