@@ -10,7 +10,8 @@ streamlit
 streamlit-folium
 langchain
 langchain-community
-langchain-google-genai
+langchain-groq
+sentence-transformers
 faiss-cpu
 pypdf
 jinja2

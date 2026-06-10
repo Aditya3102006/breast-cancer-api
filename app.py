@@ -1,6 +1,10 @@
 """
 app.py — Streamlit frontend for AI Breast Cancer Assistant (RAG Enabled)
 Provides a premium dark/light glassmorphic diagnostic dashboard.
+Supports Dual-Mode:
+  1. Distributed Mode (API connected)
+  2. Standalone Mode (runs all ML models and RAG pipeline directly in Streamlit)
+     - Enables 100% FREE deployment on Streamlit Community Cloud & Hugging Face Spaces.
 """
 
 import os
@@ -19,9 +23,33 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-API_BASE_URL = os.environ.get("API_URL", "http://localhost:8000")
+API_BASE_URL = os.environ.get("API_URL", "")
 APP_API_KEY = os.environ.get("APP_API_KEY", "breast-cancer-secret-key-2026")
 headers = {"Authorization": f"Bearer {APP_API_KEY}"}
+
+# Determine execution mode: Fallback to Standalone if no API URL is provided
+STANDALONE_MODE = os.environ.get("STANDALONE", "True").lower() == "true" or not API_BASE_URL
+
+# ─── Standalone Mode Setup ───────────────────────────────────────────────────
+if STANDALONE_MODE:
+    import pickle
+    import rag_backend as rag
+    import hospital_backend as hb
+    
+    @st.cache_resource
+    def load_standalone_resources():
+        """Loads machine learning models and features directly into Streamlit cache."""
+        try:
+            with open("model.pkl", "rb") as f:
+                model = pickle.load(f)
+            with open("features.pkl", "rb") as f:
+                features = pickle.load(f)
+            return model, features
+        except Exception as e:
+            st.error(f"Error loading local model files: {e}")
+            return None, None
+            
+    MODEL, FEATURES = load_standalone_resources()
 
 # ─── Custom CSS Injection ─────────────────────────────────────────────────────
 def inject_custom_css():
@@ -101,22 +129,34 @@ def inject_custom_css():
 
 inject_custom_css()
 
-# ─── Sidebar Branding ─────────────────────────────────────────────────────────
+# ─── Sidebar Branding & Health Check ──────────────────────────────────────────
 with st.sidebar:
     st.markdown("<h1 class='gradient-text'>Clinical Portal</h1>", unsafe_allow_html=True)
     st.markdown("🎗️ **AI Breast Cancer Assistant**")
     st.markdown("---")
     
-    # Connection Health Check
-    try:
-        resp = requests.get(f"{API_BASE_URL}/", headers=headers)
-        if resp.status_code == 200:
-            st.success("🟢 API Connected")
-        else:
-            st.warning("🟡 API Status: Unhealthy")
-    except Exception:
-        st.error("🔴 API Offline. Ensure backend is running.")
-        st.info("Run command: `uvicorn api:app --reload`")
+    if STANDALONE_MODE:
+        st.markdown("🟢 **System Status**: Online (Local)")
+    else:
+        try:
+            resp = requests.get(f"{API_BASE_URL}/", headers=headers, timeout=4)
+            if resp.status_code == 200:
+                st.markdown("🟢 **System Status**: Online (Cloud)")
+            else:
+                st.markdown("🟡 **System Status**: Degraded")
+        except Exception:
+            st.markdown("🟡 **System Status**: Standalone Active")
+            STANDALONE_MODE = True
+            import pickle
+            import rag_backend as rag
+            import hospital_backend as hb
+            try:
+                with open("model.pkl", "rb") as f:
+                    MODEL = pickle.load(f)
+                with open("features.pkl", "rb") as f:
+                    FEATURES = pickle.load(f)
+            except Exception:
+                pass
         
     st.markdown("---")
     st.markdown(
@@ -210,21 +250,21 @@ with tab1:
         }
         
         # 1. Trigger ML Prediction
-        try:
-            pred_resp = requests.post(f"{API_BASE_URL}/api/predict", json={"features": features}, headers=headers)
-            if pred_resp.status_code == 200:
-                data = pred_resp.json()
-                label = data["label"]
-                conf = data["confidence"]
-                probs = data["probabilities"]
+        label, conf = None, 0.0
+        if STANDALONE_MODE:
+            try:
+                row = {f: features.get(f, 0.0) for f in FEATURES}
+                df = pd.DataFrame([row])
+                pred = int(MODEL.predict(df)[0])
+                probs = MODEL.predict_proba(df)[0].tolist()
+                label = "MALIGNANT" if pred == 1 else "BENIGN"
+                conf = round(probs[pred], 4)
                 
-                # Store prediction in session state for tabs interaction
                 st.session_state["last_prediction"] = {"label": label, "confidence": conf, "features": features}
                 
                 # Layout results
                 st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
                 r_col1, r_col2 = st.columns(2)
-                
                 with r_col1:
                     st.markdown("#### Classifier Results")
                     if label == "MALIGNANT":
@@ -233,46 +273,80 @@ with tab1:
                     else:
                         st.markdown(f"<h2 style='color:#10b981;'>🟢 BENIGN</h2>", unsafe_allow_html=True)
                         st.success("The ML model classifies these cell nuclei as Benign (non-cancerous).")
-                        
                     st.metric(label="Model Confidence", value=f"{conf*100:.2f}%")
-                    
                 with r_col2:
                     st.markdown("#### Probability Distribution")
                     chart_data = pd.DataFrame({
                         "Class": ["Benign", "Malignant"],
-                        "Probability": probs
+                        "Probability": [round(p, 4) for p in probs]
                     })
                     st.bar_chart(chart_data, x="Class", y="Probability", color="#a78bfa")
-                
                 st.markdown("</div>", unsafe_allow_html=True)
                 
                 # 2. Trigger RAG Explanation
                 with st.spinner("Retrieving literature and generating clinical explanation..."):
-                    explain_resp = requests.post(
-                        f"{API_BASE_URL}/api/rag/explain",
-                        json={
-                            "prediction_label": label,
-                            "confidence": conf,
-                            "features": {k: float(v) for k, v in features.items() if "mean" in k} # Send only core features for brevity
-                        },
-                        headers=headers
-                    )
+                    explanation = rag.explain_prediction(label, conf, {k: float(v) for k, v in features.items() if "mean" in k})
+                    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+                    st.markdown("### 📚 Clinical Explanation (RAG Grounded)")
+                    st.markdown(explanation)
+                    st.info("💡 You can export custom prep questions for your physician based on this analysis in the **Doctor Prep Kit** tab.")
+                    st.markdown("</div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Local Classifier Execution failed: {e}")
+        else:
+            try:
+                pred_resp = requests.post(f"{API_BASE_URL}/api/predict", json={"features": features}, headers=headers)
+                if pred_resp.status_code == 200:
+                    data = pred_resp.json()
+                    label = data["label"]
+                    conf = data["confidence"]
+                    probs = data["probabilities"]
                     
-                    if explain_resp.status_code == 200:
-                        explanation = explain_resp.json()["explanation"]
-                        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-                        st.markdown("### 📚 Clinical Explanation (RAG Grounded)")
-                        st.markdown(explanation)
-                        
-                        # Set up redirect option
-                        st.info("💡 You can export custom prep questions for your physician based on this analysis in the **Doctor Prep Kit** tab.")
-                        st.markdown("</div>", unsafe_allow_html=True)
-                    else:
-                        st.error("RAG Explanation failed. Check API logs.")
-            else:
-                st.error(f"Prediction API Error: {pred_resp.text}")
-        except Exception as e:
-            st.error(f"Failed to communicate with API server: {e}")
+                    st.session_state["last_prediction"] = {"label": label, "confidence": conf, "features": features}
+                    
+                    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+                    r_col1, r_col2 = st.columns(2)
+                    with r_col1:
+                        st.markdown("#### Classifier Results")
+                        if label == "MALIGNANT":
+                            st.markdown(f"<h2 style='color:#ef4444;'>🎗️ MALIGNANT</h2>", unsafe_allow_html=True)
+                            st.error("The ML model classifies these cell nuclei as Malignant (high correlation with cancer).")
+                        else:
+                            st.markdown(f"<h2 style='color:#10b981;'>🟢 BENIGN</h2>", unsafe_allow_html=True)
+                            st.success("The ML model classifies these cell nuclei as Benign (non-cancerous).")
+                        st.metric(label="Model Confidence", value=f"{conf*100:.2f}%")
+                    with r_col2:
+                        st.markdown("#### Probability Distribution")
+                        chart_data = pd.DataFrame({
+                            "Class": ["Benign", "Malignant"],
+                            "Probability": probs
+                        })
+                        st.bar_chart(chart_data, x="Class", y="Probability", color="#a78bfa")
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    
+                    with st.spinner("Retrieving literature and generating clinical explanation..."):
+                        explain_resp = requests.post(
+                            f"{API_BASE_URL}/api/rag/explain",
+                            json={
+                                "prediction_label": label,
+                                "confidence": conf,
+                                "features": {k: float(v) for k, v in features.items() if "mean" in k}
+                            },
+                            headers=headers
+                        )
+                        if explain_resp.status_code == 200:
+                            explanation = explain_resp.json()["explanation"]
+                            st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+                            st.markdown("### 📚 Clinical Explanation (RAG Grounded)")
+                            st.markdown(explanation)
+                            st.info("💡 You can export custom prep questions for your physician based on this analysis in the **Doctor Prep Kit** tab.")
+                            st.markdown("</div>", unsafe_allow_html=True)
+                        else:
+                            st.error("RAG Explanation failed.")
+                else:
+                    st.error(f"Prediction API Error: {pred_resp.text}")
+            except Exception as e:
+                st.error(f"Failed to communicate with API server: {e}")
 
 # ─── TAB 2: Report Analyzer (Q&A) ─────────────────────────────────────────────
 with tab2:
@@ -285,23 +359,36 @@ with tab2:
         file_bytes = uploaded_file.read()
         filename = uploaded_file.name
         
-        # Trigger analyze API
+        # Trigger analyze
         if "report_analyzed" not in st.session_state or st.session_state.get("report_filename") != filename:
             with st.spinner("Uploading and parsing pathology report..."):
-                try:
-                    files = {"file": (filename, file_bytes, "application/pdf" if filename.endswith("pdf") else "text/plain")}
-                    rep_resp = requests.post(f"{API_BASE_URL}/api/rag/analyze_report", files=files, headers=headers)
-                    
-                    if rep_resp.status_code == 200:
-                        data = rep_resp.json()
-                        st.session_state["report_raw_text"] = data["raw_text"]
-                        st.session_state["report_parsed_data"] = data["parsed_data"]
-                        st.session_state["report_analyzed"] = True
-                        st.session_state["report_filename"] = filename
-                    else:
-                        st.error(f"Parsing failed: {rep_resp.text}")
-                except Exception as e:
-                    st.error(f"Report upload API error: {e}")
+                if STANDALONE_MODE:
+                    try:
+                        text = rag.extract_text_from_upload(file_bytes, filename)
+                        if not text or text.startswith("Failed") or "Unsupported" in text:
+                            st.error(text or "Empty report content.")
+                        else:
+                            parsed_data = rag.extract_pathology_data(text)
+                            st.session_state["report_raw_text"] = text
+                            st.session_state["report_parsed_data"] = parsed_data
+                            st.session_state["report_analyzed"] = True
+                            st.session_state["report_filename"] = filename
+                    except Exception as e:
+                        st.error(f"Report parsing error: {e}")
+                else:
+                    try:
+                        files = {"file": (filename, file_bytes, "application/pdf" if filename.endswith("pdf") else "text/plain")}
+                        rep_resp = requests.post(f"{API_BASE_URL}/api/rag/analyze_report", files=files, headers=headers)
+                        if rep_resp.status_code == 200:
+                            data = rep_resp.json()
+                            st.session_state["report_raw_text"] = data["raw_text"]
+                            st.session_state["report_parsed_data"] = data["parsed_data"]
+                            st.session_state["report_analyzed"] = True
+                            st.session_state["report_filename"] = filename
+                        else:
+                            st.error(f"Parsing failed: {rep_resp.text}")
+                    except Exception as e:
+                        st.error(f"Report upload API error: {e}")
                     
         if st.session_state.get("report_analyzed"):
             parsed = st.session_state["report_parsed_data"]
@@ -349,7 +436,6 @@ with tab2:
             st.markdown("### 💬 Ask Questions About This Report")
             st.caption("Ask specific questions like 'What does ER positive mean for my treatment?' or 'Are my margins clean?'")
             
-            # Chat history for report QA
             if "report_chat_history" not in st.session_state:
                 st.session_state["report_chat_history"] = []
                 
@@ -364,24 +450,33 @@ with tab2:
                 
                 with st.chat_message("assistant"):
                     with st.spinner("Searching medical guidelines and analyzing report..."):
-                        try:
-                            messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state["report_chat_history"]]
-                            chat_resp = requests.post(
-                                f"{API_BASE_URL}/api/rag/chat",
-                                json={
-                                    "messages": messages_payload,
-                                    "report_text": raw_text
-                                },
-                                headers=headers
-                            )
-                            if chat_resp.status_code == 200:
-                                reply = chat_resp.json()["reply"]
+                        if STANDALONE_MODE:
+                            try:
+                                messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state["report_chat_history"]]
+                                reply = rag.chat_qa(messages_payload, report_text=raw_text)
                                 st.markdown(reply)
                                 st.session_state["report_chat_history"].append({"role": "ai", "content": reply})
-                            else:
-                                st.error("QA Chat failed.")
-                        except Exception as e:
-                            st.error(f"Chat API error: {e}")
+                            except Exception as e:
+                                st.error(f"Chat error: {e}")
+                        else:
+                            try:
+                                messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state["report_chat_history"]]
+                                chat_resp = requests.post(
+                                    f"{API_BASE_URL}/api/rag/chat",
+                                    json={
+                                        "messages": messages_payload,
+                                        "report_text": raw_text
+                                    },
+                                    headers=headers
+                                )
+                                if chat_resp.status_code == 200:
+                                    reply = chat_resp.json()["reply"]
+                                    st.markdown(reply)
+                                    st.session_state["report_chat_history"].append({"role": "ai", "content": reply})
+                                else:
+                                    st.error("QA Chat failed.")
+                            except Exception as e:
+                                st.error(f"Chat API error: {e}")
 
 # ─── TAB 3: AI Clinical Chatbot ───────────────────────────────────────────────
 with tab3:
@@ -404,24 +499,33 @@ with tab3:
         
         with st.chat_message("assistant"):
             with st.spinner("Consulting knowledge base..."):
-                try:
-                    messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state["global_chat_history"]]
-                    chat_resp = requests.post(
-                        f"{API_BASE_URL}/api/rag/chat",
-                        json={
-                            "messages": messages_payload,
-                            "report_text": st.session_state.get("report_raw_text") # Include report if uploaded
-                        },
-                        headers=headers
-                    )
-                    if chat_resp.status_code == 200:
-                        reply = chat_resp.json()["reply"]
+                if STANDALONE_MODE:
+                    try:
+                        messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state["global_chat_history"]]
+                        reply = rag.chat_qa(messages_payload, report_text=st.session_state.get("report_raw_text"))
                         st.markdown(reply)
                         st.session_state["global_chat_history"].append({"role": "ai", "content": reply})
-                    else:
-                        st.error("Chat failed.")
-                except Exception as e:
-                    st.error(f"Chat API error: {e}")
+                    except Exception as e:
+                        st.error(f"Chat error: {e}")
+                else:
+                    try:
+                        messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state["global_chat_history"]]
+                        chat_resp = requests.post(
+                            f"{API_BASE_URL}/api/rag/chat",
+                            json={
+                                "messages": messages_payload,
+                                "report_text": st.session_state.get("report_raw_text")
+                            },
+                            headers=headers
+                        )
+                        if chat_resp.status_code == 200:
+                            reply = chat_resp.json()["reply"]
+                            st.markdown(reply)
+                            st.session_state["global_chat_history"].append({"role": "ai", "content": reply})
+                        else:
+                            st.error("Chat failed.")
+                    except Exception as e:
+                        st.error(f"Chat API error: {e}")
 
 # ─── TAB 4: Treatment Navigator ───────────────────────────────────────────────
 with tab4:
@@ -430,22 +534,27 @@ with tab4:
     
     treatment_tabs = st.tabs(["🪓 Surgery", "🧪 Chemotherapy", "⚡ Radiation Therapy", "💊 Hormone Therapy"])
     
-    # Simple Q&A function helper for treatments
     def get_treatment_info(query_str: str) -> str:
-        try:
-            resp = requests.post(
-                f"{API_BASE_URL}/api/rag/chat",
-                json={
-                    "messages": [{"role": "user", "content": query_str}],
-                    "report_text": None
-                },
-                headers=headers
-            )
-            if resp.status_code == 200:
-                return resp.json()["reply"]
-            return "Failed to retrieve treatment information."
-        except Exception as e:
-            return f"Error: {e}"
+        if STANDALONE_MODE:
+            try:
+                return rag.chat_qa([{"role": "user", "content": query_str}], report_text=None)
+            except Exception as e:
+                return f"Error loading info: {e}"
+        else:
+            try:
+                resp = requests.post(
+                    f"{API_BASE_URL}/api/rag/chat",
+                    json={
+                        "messages": [{"role": "user", "content": query_str}],
+                        "report_text": None
+                    },
+                    headers=headers
+                )
+                if resp.status_code == 200:
+                    return resp.json()["reply"]
+                return "Failed to retrieve treatment information."
+            except Exception as e:
+                return f"Error: {e}"
             
     with treatment_tabs[0]:
         st.markdown("#### Surgical Options")
@@ -525,28 +634,37 @@ with tab5:
     
     if st.button("📋 Generate My Custom Consultation Prep Kit", type="primary", use_container_width=True):
         with st.spinner("Compiling patient details and formatting question guides..."):
-            try:
-                payload = {
-                    "report_text": st.session_state.get("report_raw_text") if has_report else None,
-                    "prediction_label": st.session_state["last_prediction"]["label"] if has_pred else None,
-                    "confidence": st.session_state["last_prediction"]["confidence"] if has_pred else None
-                }
-                
-                prep_resp = requests.post(f"{API_BASE_URL}/api/rag/doctor_prep", json=payload, headers=headers)
-                if prep_resp.status_code == 200:
-                    kit = prep_resp.json()["prep_kit"]
+            if STANDALONE_MODE:
+                try:
+                    kit = rag.generate_doctor_prep_kit(
+                        report_text=st.session_state.get("report_raw_text") if has_report else None,
+                        prediction_label=st.session_state["last_prediction"]["label"] if has_pred else None,
+                        confidence=st.session_state["last_prediction"]["confidence"] if has_pred else None
+                    )
                     st.session_state["doctor_prep_kit"] = kit
-                else:
-                    st.error("Failed to generate preparation kit.")
-            except Exception as e:
-                st.error(f"Doctor prep API error: {e}")
+                except Exception as e:
+                    st.error(f"Doctor prep generation failed: {e}")
+            else:
+                try:
+                    payload = {
+                        "report_text": st.session_state.get("report_raw_text") if has_report else None,
+                        "prediction_label": st.session_state["last_prediction"]["label"] if has_pred else None,
+                        "confidence": st.session_state["last_prediction"]["confidence"] if has_pred else None
+                    }
+                    prep_resp = requests.post(f"{API_BASE_URL}/api/rag/doctor_prep", json=payload, headers=headers)
+                    if prep_resp.status_code == 200:
+                        kit = prep_resp.json()["prep_kit"]
+                        st.session_state["doctor_prep_kit"] = kit
+                    else:
+                        st.error("Failed to generate preparation kit.")
+                except Exception as e:
+                    st.error(f"Doctor prep API error: {e}")
                 
     if "doctor_prep_kit" in st.session_state:
         st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
         st.markdown("### Your Custom Physician Preparation Guide")
         st.markdown(st.session_state["doctor_prep_kit"])
         
-        # Download guide as markdown
         st.download_button(
             label="📥 Download Guide as Markdown (TXT)",
             data=st.session_state["doctor_prep_kit"],
@@ -566,81 +684,119 @@ with tab6:
     with map_col1:
         search_query = st.text_input("Enter Address / City / Location", "New Delhi, India", help="E.g., New Delhi, Mumbai, Boston, etc.")
         radius = st.slider("Search Radius (km)", 2, 30, 10)
-        
         facility_type = st.selectbox(
             "Facility Specialization",
             ["All", "Cancer Center / Oncology", "Hospital", "Clinic"]
         )
-        
         ownership = st.selectbox(
             "Hospital Type / Panel",
             ["All", "Government Only", "Private Only", "Panel / Empanelled"]
         )
-        
         search_map_btn = st.button("🔍 Find Nearby Facilities", use_container_width=True)
         
     with map_col2:
-        if search_map_btn or "last_map_query" not in st.session_state:
+        if "map_results" not in st.session_state:
+            st.session_state["map_results"] = None
+
+        if search_map_btn:
             st.session_state["last_map_query"] = search_query
             with st.spinner("Geocoding location and retrieving medical facilities..."):
-                try:
-                    # 1. Geocode
-                    geo_resp = requests.get(f"{API_BASE_URL}/api/geocode", params={"q": search_query}, headers=headers)
-                    if geo_resp.status_code == 200:
-                        geo_data = geo_resp.json()
-                        lat, lng = geo_data["lat"], geo_data["lng"]
-                        display_name = geo_data["display_name"]
-                        
-                        st.markdown(f"**Location Found:** {display_name}")
-                        st.markdown(f"Coordinates: `{lat}, {lng}`")
-                        
-                        # 2. Fetch hospitals
-                        hosp_params = {
-                            "lat": lat,
-                            "lng": lng,
-                            "radius_km": radius,
-                            "filter_type": facility_type,
-                            "filter_ownership": ownership
-                        }
-                        hosp_resp = requests.get(f"{API_BASE_URL}/api/hospitals", params=hosp_params, headers=headers)
-                        
-                        if hosp_resp.status_code == 200:
-                            hosp_data = hosp_resp.json()
-                            results = hosp_data.get("results", [])
-                            count = hosp_data.get("count", 0)
+                if STANDALONE_MODE:
+                    try:
+                        # 1. Geocode
+                        geo_data = hb.geocode_location(search_query)
+                        if geo_data and "error" not in geo_data:
+                            lat, lng = geo_data["lat"], geo_data["lng"]
+                            display_name = geo_data["display_name"]
                             
-                            st.write(f"Found **{count}** facilities within {radius} km.")
-                            
-                            # 3. Build map
-                            import hospital_backend as hb
-                            fmap = hb.build_map(lat, lng, results, radius)
-                            st_folium(fmap, width=900, height=500)
-                            
-                            # Show hospital details in a table underneath
-                            if results:
-                                st.markdown("#### Details of Found Facilities")
-                                detail_list = []
-                                for r in results:
-                                    govt_status = "Government" if r["is_govt"] else "Private"
-                                    panels = ", ".join(r["panels"]) if r["panels"] else "None"
-                                    detail_list.append({
-                                        "Name": r["name"],
-                                        "Grade / Tier": r["tier"],
-                                        "Ownership": govt_status,
-                                        "Distance (km)": r["distance_km"],
-                                        "Address": r["address"],
-                                        "Panels": panels,
-                                        "Phone": r["phone"]
-                                    })
-                                st.dataframe(pd.DataFrame(detail_list), use_container_width=True)
+                            # 2. Fetch hospitals
+                            hosp_data = hb.search_medical_facilities(
+                                lat, lng, radius,
+                                filter_type=facility_type,
+                                filter_ownership=ownership
+                            )
+                            if hosp_data.get("success"):
+                                results = hosp_data.get("results", [])
+                                count = hosp_data.get("count", 0)
+                                st.session_state["map_results"] = {
+                                    "display_name": display_name,
+                                    "lat": lat,
+                                    "lng": lng,
+                                    "count": count,
+                                    "results": results,
+                                    "radius": radius
+                                }
+                            else:
+                                st.error(f"Search failed: {hosp_data.get('error')}")
                         else:
-                            st.error(f"Hospitals search failed: {hosp_resp.text}")
-                    else:
-                        st.error("Location not found. Please try a different query.")
-                except Exception as e:
-                    st.error(f"Facility finder error: {e}")
-                    import traceback
-                    st.text(traceback.format_exc())
+                            st.error("Location not found. Please try a different query.")
+                    except Exception as e:
+                        st.error(f"Facility finder error: {e}")
+                else:
+                    try:
+                        # 1. Geocode
+                        geo_resp = requests.get(f"{API_BASE_URL}/api/geocode", params={"q": search_query}, headers=headers)
+                        if geo_resp.status_code == 200:
+                            geo_data = geo_resp.json()
+                            lat, lng = geo_data["lat"], geo_data["lng"]
+                            display_name = geo_data["display_name"]
+                            
+                            # 2. Fetch hospitals
+                            hosp_params = {
+                                "lat": lat,
+                                "lng": lng,
+                                "radius_km": radius,
+                                "filter_type": facility_type,
+                                "filter_ownership": ownership
+                            }
+                            hosp_resp = requests.get(f"{API_BASE_URL}/api/hospitals", params=hosp_params, headers=headers)
+                            
+                            if hosp_resp.status_code == 200:
+                                hosp_data = hosp_resp.json()
+                                results = hosp_data.get("results", [])
+                                count = hosp_data.get("count", 0)
+                                st.session_state["map_results"] = {
+                                    "display_name": display_name,
+                                    "lat": lat,
+                                    "lng": lng,
+                                    "count": count,
+                                    "results": results,
+                                    "radius": radius
+                                }
+                            else:
+                                st.error(f"Hospitals search failed: {hosp_resp.text}")
+                        else:
+                            st.error("Location not found. Please try a different query.")
+                    except Exception as e:
+                        st.error(f"Facility finder error: {e}")
+
+        # Render search results if they exist in state
+        if st.session_state["map_results"] is not None:
+            data = st.session_state["map_results"]
+            st.markdown(f"**Location Found:** {data['display_name']}")
+            st.markdown(f"Coordinates: `{data['lat']}, {data['lng']}`")
+            st.write(f"Found **{data['count']}** facilities within {data['radius']} km.")
+            
+            # Rebuild map dynamically based on saved parameters
+            fmap = hb.build_map(data["lat"], data["lng"], data["results"], data["radius"])
+            st_folium(fmap, width=900, height=500, key=f"folium_map_{data['lat']}_{data['lng']}_{data['radius']}")
+            
+            # Details table
+            if data["results"]:
+                st.markdown("#### Details of Found Facilities")
+                detail_list = []
+                for r in data["results"]:
+                    govt_status = "Government" if r["is_govt"] else "Private"
+                    panels = ", ".join(r["panels"]) if r["panels"] else "None"
+                    detail_list.append({
+                        "Name": r["name"],
+                        "Grade / Tier": r["tier"],
+                        "Ownership": govt_status,
+                        "Distance (km)": r["distance_km"],
+                        "Address": r["address"],
+                        "Panels": panels,
+                        "Phone": r["phone"]
+                    })
+                st.dataframe(pd.DataFrame(detail_list), use_container_width=True)
         else:
-            # Render from session if exists
             st.info("Modify inputs on the left and click 'Find Nearby Facilities' to load results.")

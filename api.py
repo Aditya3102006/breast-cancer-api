@@ -13,7 +13,8 @@ from pydantic import BaseModel
 import os, pickle, pandas as pd
 from typing import Optional, List
 import hospital_backend as hb
-import google.generativeai as genai
+# google.generativeai is replaced by langchain-groq
+
 import rag_backend as rag
 
 # ─── Security Setup ───────────────────────────────────────────────────────────
@@ -39,21 +40,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── Gemini AI Setup ──────────────────────────────────────────────────────────
-# Using gemini-1.5-flash
-GEMINI_KEY = os.environ.get("GOOGLE_API_KEY", os.environ.get("GEMINI_KEY", "AQ.Ab8RN6JqiFwGyIbwD5AWx8w0pf9Bn9lqHzgy6UcbYBcihcdcKQ"))
-genai.configure(api_key=GEMINI_KEY)
+# ─── Groq AI Setup ────────────────────────────────────────────────────────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 
 SYSTEM_PROMPT = """You are a compassionate, expert clinical AI assistant specializing in breast cancer awareness, diagnosis, and treatment. 
 You help patients understand medical terms, symptoms, and treatment options in simple language. 
 Always remind users that you are an AI and they should consult a qualified oncologist for medical decisions. 
 Keep responses concise, empathetic, and easy to understand."""
 
-# Create model with system instruction
-model = genai.GenerativeModel(
-    model_name='gemini-2.5-flash',
-    system_instruction=SYSTEM_PROMPT
-)
 
 # ─── Load ML Model ────────────────────────────────────────────────────────────
 with open("model.pkl", "rb") as f:
@@ -137,36 +131,31 @@ def hospitals(
 
 @app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 def chat(req: ChatRequest):
-    """Proxy chat requests to Gemini with clinical context."""
+    """Proxy chat requests to Groq with clinical context."""
     try:
-        # Convert local message format to Gemini format
-        # Gemini history MUST alternating and MUST start with 'user'
-        history = []
-        for m in req.messages[:-1]:
-            # Skip the initial AI greeting if it's the first message
-            if not history and m.role == "ai":
-                continue
-            
-            history.append({
-                "role": "user" if m.role == "user" else "model",
-                "parts": [m.content]
-            })
-
-        user_msg = req.messages[-1].content
+        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+        from langchain_groq import ChatGroq
         
-        # Start a chat session
-        chat_session = model.start_chat(history=history)
-        response = chat_session.send_message(user_msg)
-        
-        return ChatResponse(reply=response.text)
+        lc_messages = [SystemMessage(content=SYSTEM_PROMPT)]
+        for m in req.messages:
+            if m.role == "user":
+                lc_messages.append(HumanMessage(content=m.content))
+            else:
+                lc_messages.append(AIMessage(content=m.content))
+                
+        groq_llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            groq_api_key=GROQ_API_KEY,
+            temperature=0.3
+        )
+        response = groq_llm.invoke(lc_messages)
+        return ChatResponse(reply=response.content)
         
     except Exception as e:
         import traceback
         traceback.print_exc() # Show error in console
-        error_str = str(e)
-        if "429" in error_str:
-            raise HTTPException(status_code=429, detail="AI Service is currently busy. Please try again in a minute.")
-        raise HTTPException(status_code=500, detail=error_str)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ─── RAG Schemas ──────────────────────────────────────────────────────────────

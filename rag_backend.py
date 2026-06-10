@@ -13,12 +13,13 @@ import glob
 import json
 from typing import List, Dict, Optional, Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_groq import ChatGroq
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-GEMINI_KEY = os.environ.get("GOOGLE_API_KEY", os.environ.get("GEMINI_KEY", "AQ.Ab8RN6JqiFwGyIbwD5AWx8w0pf9Bn9lqHzgy6UcbYBcihcdcKQ"))
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 
 # Global variables for caching
 _VECTOR_STORE = None
@@ -29,9 +30,8 @@ def get_vector_store() -> FAISS:
     if _VECTOR_STORE is not None:
         return _VECTOR_STORE
 
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/gemini-embedding-001", 
-        google_api_key=GEMINI_KEY
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2"
     )
     
     index_path = "faiss_index"
@@ -134,11 +134,11 @@ def extract_pathology_data(report_text: str) -> Dict[str, Any]:
         "}"
     )
     
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
-        google_api_key=GEMINI_KEY,
+    llm = ChatGroq(
+        model="llama-3.1-8b-instant",
+        groq_api_key=GROQ_API_KEY,
         temperature=0.0,
-        model_kwargs={"response_mime_type": "application/json"}
+        model_kwargs={"response_format": {"type": "json_object"}}
     )
     
     try:
@@ -193,9 +193,9 @@ def explain_prediction(prediction_label: str, confidence: float, features: Dict[
             "4. Supportive, empathetic closing."
         )
         
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=GEMINI_KEY,
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            groq_api_key=GROQ_API_KEY,
             temperature=0.2
         )
         
@@ -255,9 +255,9 @@ def chat_qa(messages: List[Dict[str, str]], report_text: Optional[str] = None) -
             elif role in ("ai", "model", "assistant"):
                 lc_messages.append(AIMessage(content=content))
                 
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=GEMINI_KEY,
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            groq_api_key=GROQ_API_KEY,
             temperature=0.3
         )
         
@@ -297,9 +297,9 @@ def generate_doctor_prep_kit(report_text: Optional[str] = None, prediction_label
             "4. Practical checklist of things to bring to the appointment (scans, reports, notebook, support person)."
         )
         
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=GEMINI_KEY,
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            groq_api_key=GROQ_API_KEY,
             temperature=0.3
         )
         
