@@ -19,7 +19,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # Global variables for caching
 _VECTOR_STORE = None

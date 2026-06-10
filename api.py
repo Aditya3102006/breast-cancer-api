@@ -41,7 +41,7 @@ app.add_middleware(
 )
 
 # ─── Groq AI Setup ────────────────────────────────────────────────────────────
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 SYSTEM_PROMPT = """You are a compassionate, expert clinical AI assistant specializing in breast cancer awareness, diagnosis, and treatment. 
 You help patients understand medical terms, symptoms, and treatment options in simple language. 
