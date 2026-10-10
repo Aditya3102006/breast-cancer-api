@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environment & Secrets — NEVER commit these
+.env
+.streamlit/secrets.toml
+
+# Large binary files (optional - keep if needed for deployment)
+# model.pkl
+# data.csv
+# faiss_index/
+
+# VS Code
+.vscode/

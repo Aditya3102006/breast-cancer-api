@@ -1,0 +1,27 @@
+# Python cache files
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+bin/
+lib/
+include/
+
+# IDE / System configurations
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.git/
+.gitignore
+
+# Local development / credentials (do not package API keys)
+.env
+*.local
+secrets.toml
