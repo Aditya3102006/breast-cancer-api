@@ -159,7 +159,7 @@ def extract_pathology_data(report_text: str) -> Dict[str, Any]:
     )
     
     llm = ChatGroq(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         groq_api_key=get_groq_api_key(),
         temperature=0.0,
         model_kwargs={"response_format": {"type": "json_object"}}
@@ -218,7 +218,7 @@ def explain_prediction(prediction_label: str, confidence: float, features: Dict[
         )
         
         llm = ChatGroq(
-            model="llama3-70b-8192",
+            model="qwen/qwen3.8-27b",
             groq_api_key=get_groq_api_key(),
             temperature=0.2
         )
@@ -280,7 +280,7 @@ def chat_qa(messages: List[Dict[str, str]], report_text: Optional[str] = None) -
                 lc_messages.append(AIMessage(content=content))
                 
         llm = ChatGroq(
-            model="llama3-70b-8192",
+            model="qwen/qwen3.8-27b",
             groq_api_key=get_groq_api_key(),
             temperature=0.3
         )
@@ -322,7 +322,7 @@ def generate_doctor_prep_kit(report_text: Optional[str] = None, prediction_label
         )
         
         llm = ChatGroq(
-            model="llama3-70b-8192",
+            model="qwen/qwen3.8-27b",
             groq_api_key=get_groq_api_key(),
             temperature=0.3
         )

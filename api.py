@@ -145,7 +145,7 @@ def chat(req: ChatRequest):
                 lc_messages.append(AIMessage(content=m.content))
                 
         groq_llm = ChatGroq(
-            model="llama3-70b-8192",
+            model="qwen/qwen3.8-27b",
             groq_api_key=GROQ_API_KEY,
             temperature=0.3
         )
