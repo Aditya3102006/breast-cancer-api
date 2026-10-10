@@ -162,6 +162,7 @@ def extract_pathology_data(report_text: str) -> Dict[str, Any]:
         model="openai/gpt-oss-20b",
         groq_api_key=get_groq_api_key(),
         temperature=0.0,
+        max_tokens=500,
         model_kwargs={"response_format": {"type": "json_object"}}
     )
     
@@ -208,19 +209,18 @@ def explain_prediction(prediction_label: str, confidence: float, features: Dict[
         
         user_prompt = (
             f"The machine learning model predicted: {prediction_label}\n"
-            f"Confidence level: {confidence * 100:.2f}%\n"
-            f"Patient tumor features analyzed: {features_str}\n\n"
-            "Based on this, write a detailed explanation addressing:\n"
-            "1. What this prediction means (benign vs malignant explanation).\n"
-            "2. Key risk factors and common symptoms related to this type of lesion.\n"
-            "3. Recommended next diagnostic steps (e.g., biopsy if not done, specialist consultation, follow-up imaging).\n"
-            "4. Supportive, empathetic closing."
+            f"Confidence level: {confidence * 100:.2f}%\n\n"
+            "Write a concise explanation (max 3 paragraphs) covering:\n"
+            "1. What this prediction means (benign vs malignant).\n"
+            "2. Recommended next steps.\n"
+            "3. Remind the patient to consult their doctor."
         )
         
         llm = ChatGroq(
             model="qwen/qwen3.8-27b",
             groq_api_key=get_groq_api_key(),
-            temperature=0.2
+            temperature=0.2,
+            max_tokens=800
         )
         
         response = llm.invoke([
@@ -282,7 +282,8 @@ def chat_qa(messages: List[Dict[str, str]], report_text: Optional[str] = None) -
         llm = ChatGroq(
             model="qwen/qwen3.8-27b",
             groq_api_key=get_groq_api_key(),
-            temperature=0.3
+            temperature=0.3,
+            max_tokens=800
         )
         
         response = llm.invoke(lc_messages)
@@ -324,7 +325,8 @@ def generate_doctor_prep_kit(report_text: Optional[str] = None, prediction_label
         llm = ChatGroq(
             model="qwen/qwen3.8-27b",
             groq_api_key=get_groq_api_key(),
-            temperature=0.3
+            temperature=0.3,
+            max_tokens=800
         )
         
         response = llm.invoke([
