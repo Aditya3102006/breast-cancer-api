@@ -3,7 +3,7 @@ uvicorn
 pydantic
 pandas
 scikit-learn
-google-generativeai
+xgboost
 requests
 python-multipart
 streamlit
@@ -11,7 +11,10 @@ streamlit-folium
 langchain
 langchain-community
 langchain-groq
+langchain-text-splitters
+langchain-core
 sentence-transformers
 faiss-cpu
 pypdf
 jinja2
+python-dotenv
